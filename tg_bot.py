@@ -43,6 +43,7 @@ class TempMailAPI:
           f"{self.BASE_URL}/domains", proxy=self.proxy, timeout=10
       ) as resp:
         if resp.status != 200:
+          print(f"[Mail Error] Domains status: {resp.status}")
           return None, None, None
         data = await resp.json()
         domains = data.get("hydra:member", [])
@@ -64,17 +65,19 @@ class TempMailAPI:
           timeout=10,
       ) as resp:
         if resp.status not in (200, 201):
+          print(f"[Mail Error] Create account status: {resp.status}")
           return None, None, None
 
       async with self.session.post(
           f"{self.BASE_URL}/token", json=payload, proxy=self.proxy, timeout=10
       ) as resp:
         if resp.status != 200:
+          print(f"[Mail Error] Token status: {resp.status}")
           return None, None, None
         token_data = await resp.json()
         return email, password, token_data.get("token")
     except Exception as e:
-      print(f"[Mail Error] {e}")
+      print(f"[Mail Exception] {e}")
       return None, None, None
 
   async def get_confirmation_link(
@@ -118,6 +121,7 @@ class TempMailAPI:
 class PikaEngine:
 
   def __init__(self):
+    # Основные рабочие параметры по умолчанию
     self.supabase_host = "xrcfahrzkjpblmrsaknx.supabase.co"
     self.api_key = "sb_publishable_HTxwdzVcJvk01MQMOCQCmg_KULx5ESC"
 
@@ -136,22 +140,31 @@ class PikaEngine:
     return code_verifier, code_challenge
 
   async def update_config(self, session: aiohttp.ClientSession, proxy: str):
-    """Принудительно проверяет и обновляет API-ключи и хост со страницы Pika"""
+    """Интеллектуальная проверка ключей с защитой от сбоев"""
     try:
-      print("[Config Check] Проверка актуальных сетевых ключей Pika...")
+      print("[Config Check] Запрос к create.pika.art для проверки ключей...")
+      headers = {
+          "User-Agent": (
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+              " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          )
+      }
       async with session.get(
-          "https://create.pika.art", proxy=proxy, timeout=10
+          "https://create.pika.art", headers=headers, proxy=proxy, timeout=10
       ) as resp:
         if resp.status != 200:
+          print(f"[Config Warning] Статус ответа сайта: {resp.status}")
           return
         html = await resp.text()
 
       js_links = re.findall(r'src="(/_next/static/[^"]+\.js)"', html)
-      found_new = False
       for link in js_links[:5]:
         try:
           async with session.get(
-              f"https://create.pika.art{link}", proxy=proxy, timeout=10
+              f"https://create.pika.art{link}",
+              headers=headers,
+              proxy=proxy,
+              timeout=10,
           ) as js_resp:
             if js_resp.status != 200:
               continue
@@ -162,28 +175,33 @@ class PikaEngine:
               self.supabase_host = host_match.group(1)
               self.api_key = key_match.group(1)
               print(
-                  f"[Config Success] Найдены свежие ключи! Host:"
-                  f" {self.supabase_host}"
+                  f"[Config Success] Обновлено! Host: {self.supabase_host}"
               )
-              found_new = True
-              break
+              return
         except Exception:
           continue
-      if not found_new:
-        print("[Config Info] Используются стандартные ключи.")
+      print(
+          "[Config Info] Новые ключи не найдены в JS, используем базовые"
+          " рабочие."
+      )
     except Exception as e:
-      print(f"[Config Error] Не удалось обновить ключи: {e}")
+      print(
+          f"[Config Error] Не удалось обновить через сайт ({e}), используем"
+          " базовые."
+      )
 
   async def register_with_proxy_rotation(
       self, session: aiohttp.ClientSession
   ):
     for proxy in PROXY_LIST:
       try:
+        # Проверяем ключи, но если сайт недоступен — код не падает, а идет дальше
         await self.update_config(session, proxy)
 
         mail_api = TempMailAPI(session, proxy=proxy)
         email, password, mail_token = await mail_api.create_account()
         if not email:
+          print("[Reg] Не удалось создать почту для регистрации")
           continue
 
         _, code_challenge = self.generate_pkce()
@@ -206,11 +224,14 @@ class PikaEngine:
         async with session.post(
             signup_url, headers=headers, json=payload, proxy=proxy, timeout=10
         ) as resp:
+          resp_body = await resp.text()
+          print(f"[Supabase Signup Status {resp.status}]: {resp_body}")
           if resp.status not in (200, 201):
             continue
 
         confirm_link = await mail_api.get_confirmation_link(mail_token)
         if not confirm_link:
+          print("[Reg] Не получена ссылка подтверждения по почте")
           continue
 
         async with session.get(
@@ -219,7 +240,7 @@ class PikaEngine:
           if confirm_resp.status == 200:
             return email, password, proxy
       except Exception as e:
-        print(f"[Registration Error] {e}")
+        print(f"[Registration Exception] {e}")
         continue
     return None, None, None
 
@@ -237,8 +258,10 @@ class PikaEngine:
         if resp.status == 200:
           data = await resp.json()
           return data.get("access_token")
+        else:
+          print(f"[Login Error Status]: {resp.status}, Body: {await resp.text()}")
     except Exception as e:
-      print(f"[Login Error] {e}")
+      print(f"[Login Exception] {e}")
     return None
 
   async def create_video(
@@ -269,7 +292,7 @@ class PikaEngine:
           data = await resp.json()
           return data.get("id") or data.get("job_id")
     except Exception as e:
-      print(f"[Create Video Error Exception]: {e}")
+      print(f"[Create Video Exception]: {e}")
     return None
 
   async def poll_video(
@@ -392,5 +415,5 @@ if __name__ == "__main__":
   web_thread.daemon = True
   web_thread.start()
 
-  print("🤖 Бот запущен с автопроверкой сетевых ключей...")
+  print("🤖 Бот запущен с безопасной автопроверкой ключей...")
   asyncio.run(bot.infinity_polling(timeout=20))
