@@ -118,6 +118,7 @@ class TempMailAPI:
 class PikaEngine:
 
   def __init__(self):
+    # Начальные фолбэк-значения
     self.supabase_host = "xrcfahrzkjpblmrsaknx.supabase.co"
     self.api_key = "sb_publishable_HTxwdzVcJvk01MQMOCQCmg_KULx5ESC"
 
@@ -136,32 +137,55 @@ class PikaEngine:
     return code_verifier, code_challenge
 
   async def update_config(self, session: aiohttp.ClientSession, proxy: str):
+    """Принудительно проверяет и обновляет API-ключи и хост со страницы Pika"""
     try:
+      print("[Config Check] Проверка актуальных сетевых ключей Pika...")
       async with session.get(
           "https://create.pika.art", proxy=proxy, timeout=10
       ) as resp:
+        if resp.status != 200:
+          print(
+              f"[Config Warning] Главная страница вернула статус {resp.status}"
+          )
+          return
         html = await resp.text()
+
       js_links = re.findall(r'src="(/_next/static/[^"]+\.js)"', html)
-      for link in js_links:
-        async with session.get(
-            f"https://create.pika.art{link}", proxy=proxy, timeout=10
-        ) as js_resp:
-          js_text = await js_resp.text()
-          host_match = re.search(r"([a-z0-9]+\.supabase\.co)", js_text)
-          key_match = re.search(r"(sb_publishable_[A-Za-z0-9_]+)", js_text)
-          if host_match and key_match:
-            self.supabase_host = host_match.group(1)
-            self.api_key = key_match.group(1)
-            break
+      found_new = False
+      for link in js_links[:5]:  две первые ссылки
+        try:
+          async with session.get(
+              f"https://create.pika.art{link}", proxy=proxy, timeout=10
+          ) as js_resp:
+            if js_resp.status != 200:
+              continue
+            js_text = await js_resp.text()
+            host_match = re.search(r"([a-z0-9]+\.supabase\.co)", js_text)
+            key_match = re.search(r"(sb_publishable_[A-Za-z0-9_]+)", js_text)
+            if host_match and key_match:
+              self.supabase_host = host_match.group(1)
+              self.api_key = key_match.group(1)
+              print(
+                  f"[Config Success] Найдены свежие ключи! Host:"
+                  f" {self.supabase_host}"
+              )
+              found_new = True
+              break
+        except Exception:
+          continue
+      if not found_new:
+        print("[Config Info] Используются стандартные ключи.")
     except Exception as e:
-      print(f"[Config Warning] {e}")
+      print(f"[Config Error] Не удалось обновить ключи: {e}")
 
   async def register_with_proxy_rotation(
       self, session: aiohttp.ClientSession
   ):
     for proxy in PROXY_LIST:
       try:
+        # Всегда проверяем и обновляем ключи перед регистрацией
         await self.update_config(session, proxy)
+
         mail_api = TempMailAPI(session, proxy=proxy)
         email, password, mail_token = await mail_api.create_account()
         if not email:
@@ -293,7 +317,8 @@ async def send_welcome(message):
 async def process_prompt(message):
   prompt = message.text
   status_msg = await bot.reply_to(
-      message, "⏳ [1/4] Регистрация временного аккаунта..."
+      message,
+      "⏳ [1/4] Проверка сети и регистрация временного аккаунта...",
   )
 
   async with aiohttp.ClientSession() as session:
@@ -302,8 +327,8 @@ async def process_prompt(message):
     )
     if not email:
       await bot.edit_message_text(
-          "❌ Ошибка регистрации аккаунта (возможно, временная почта или API"
-          " недоступны). Попробуйте позже.",
+          "❌ Ошибка регистрации аккаунта (ключи сети обновились или API недоступен)."
+          " Попробуйте позже.",
           message.chat.id,
           status_msg.message_id,
       )
@@ -318,7 +343,9 @@ async def process_prompt(message):
     token = await engine.login(session, email, password, used_proxy)
     if not token:
       await bot.edit_message_text(
-          "❌ Ошибка входа в аккаунт.", message.chat.id, status_msg.message_id
+          "❌ Ошибка входа в аккаунт через API.",
+          message.chat.id,
+          status_msg.message_id,
       )
       return
 
@@ -370,5 +397,5 @@ if __name__ == "__main__":
   web_thread.daemon = True
   web_thread.start()
 
-  print("🤖 Бот запущен...")
+  print("🤖 Бот запущен с автопроверкой сетевых ключей...")
   asyncio.run(bot.infinity_polling(timeout=20))
