@@ -16,7 +16,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-  return "Pika API Telegram Bot with Proxy Rotation is running!"
+  return "Pika API Telegram Bot is running!"
 
 
 def run_web():
@@ -24,24 +24,14 @@ def run_web():
   app.run(host="0.0.0.0", port=port)
 
 
-# Читаем токен из переменных окружения Render
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = AsyncTeleBot(BOT_TOKEN)
 
-# Список бесплатных прокси для ротации (будут перебираться по очереди или случайно)
-PROXY_LIST = [
-    # Можете добавлять сюда свои рабочие прокси в формате "http://ip:port" или "socks5://ip:port"
-    None,  # Первый запрос попробуем сделать без прокси
-    "http://185.162.229.45:80",
-    "http://190.61.88.147:8080",
-    "http://200.105.215.22:3128",
-    "http://43.153.88.125:80",
-]
+# Список прокси (первым идет None — прямое подключение без прокси)
+PROXY_LIST = [None]
 
 
 class TempMailAPI:
-  """Временная почта Mail.tm"""
-
   BASE_URL = "https://api.mail.tm"
 
   def __init__(self, session: aiohttp.ClientSession, proxy: str = None):
@@ -56,7 +46,10 @@ class TempMailAPI:
         if resp.status != 200:
           return None, None, None
         data = await resp.json()
-        domain = data["hydra:member"][0]["domain"]
+        domains = data.get("hydra:member", [])
+        if not domains:
+          return None, None, None
+        domain = domains[0]["domain"]
 
       rand_str = "".join(
           random.choices(string.ascii_lowercase + string.digits, k=8)
@@ -82,11 +75,11 @@ class TempMailAPI:
         token_data = await resp.json()
         return email, password, token_data.get("token")
     except Exception as e:
-      print(f"[Mail Error with proxy {self.proxy}] {e}")
+      print(f"[Mail Error] {e}")
       return None, None, None
 
   async def get_confirmation_link(
-      self, mail_token: str, timeout: int = 45
+      self, mail_token: str, timeout: int = 40
   ) -> str:
     headers = {"Authorization": f"Bearer {mail_token}"}
     start_time = asyncio.get_event_loop().time()
@@ -124,7 +117,6 @@ class TempMailAPI:
 
 
 class PikaEngine:
-  """Движок регистрации и генерации Pika.art с ротацией прокси"""
 
   def __init__(self):
     self.supabase_host = "xrcfahrzkjpblmrsaknx.supabase.co"
@@ -163,17 +155,12 @@ class PikaEngine:
             self.api_key = key_match.group(1)
             break
     except Exception as e:
-      print(f"[Config Update Warning] {e}")
+      print(f"[Config Warning] {e}")
 
   async def register_with_proxy_rotation(
       self, session: aiohttp.ClientSession
   ):
-    """Пробует зарегистрироваться, перебирая прокси из списка при неудаче"""
-    shuffled_proxies = list(PROXY_LIST)
-    random.shuffle(shuffled_proxies)
-
-    for proxy in shuffled_proxies:
-      print(f"[*] Попытка регистрации через прокси: {proxy}")
+    for proxy in PROXY_LIST:
       try:
         await self.update_config(session, proxy)
         mail_api = TempMailAPI(session, proxy=proxy)
@@ -214,45 +201,51 @@ class PikaEngine:
           if confirm_resp.status == 200:
             return email, password, proxy
       except Exception as e:
-        print(f"[!] Ошибка с прокси {proxy}: {e}")
+        print(f"[Registration Error] {e}")
         continue
     return None, None, None
 
   async def login(
       self, session: aiohttp.ClientSession, email: str, password: str, proxy: str
   ) -> str:
-    url = f"https://{self.supabase_host}/auth/v1/token?grant_type=password"
-    headers = {"apikey": self.api_key, "content-type": "application/json"}
-    payload = {"email": email, "password": password}
+    try:
+      url = f"https://{self.supabase_host}/auth/v1/token?grant_type=password"
+      headers = {"apikey": self.api_key, "content-type": "application/json"}
+      payload = {"email": email, "password": password}
 
-    async with session.post(
-        url, headers=headers, json=payload, proxy=proxy, timeout=10
-    ) as resp:
-      if resp.status == 200:
-        data = await resp.json()
-        return data.get("access_token")
+      async with session.post(
+          url, headers=headers, json=payload, proxy=proxy, timeout=10
+      ) as resp:
+        if resp.status == 200:
+          data = await resp.json()
+          return data.get("access_token")
+    except Exception as e:
+      print(f"[Login Error] {e}")
     return None
 
   async def create_video(
       self, session: aiohttp.ClientSession, token: str, prompt: str, proxy: str
   ) -> str:
-    gen_url = "https://create-api.pika.art/v1/generate"
-    headers = {
-        "authorization": f"Bearer {token}",
-        "content-type": "application/json",
-        "origin": "https://create.pika.art",
-    }
-    payload = {
-        "promptText": prompt,
-        "options": {"aspectRatio": "16:9", "frameRate": 24},
-    }
+    try:
+      gen_url = "https://create-api.pika.art/v1/generate"
+      headers = {
+          "authorization": f"Bearer {token}",
+          "content-type": "application/json",
+          "origin": "https://create.pika.art",
+      }
+      payload = {
+          "promptText": prompt,
+          "options": {"aspectRatio": "16:9", "frameRate": 24},
+      }
 
-    async with session.post(
-        gen_url, headers=headers, json=payload, proxy=proxy, timeout=15
-    ) as resp:
-      if resp.status in (200, 201):
-        data = await resp.json()
-        return data.get("id") or data.get("job_id")
+      async with session.post(
+          gen_url, headers=headers, json=payload, proxy=proxy, timeout=15
+      ) as resp:
+        if resp.status in (200, 201):
+          data = await resp.json()
+          return data.get("id") or data.get("job_id")
+    except Exception as e:
+      print(f"[Create Video Error] {e}")
     return None
 
   async def poll_video(
@@ -261,7 +254,7 @@ class PikaEngine:
     status_url = f"https://create-api.pika.art/v1/jobs/{job_id}"
     headers = {"authorization": f"Bearer {token}"}
 
-    for _ in range(35):
+    for _ in range(30):
       await asyncio.sleep(8)
       try:
         async with session.get(
@@ -286,11 +279,8 @@ engine = PikaEngine()
 async def send_welcome(message):
   await bot.reply_to(
       message,
-      "👋 Привет! Бот настроен с **авторотацией прокси**.\n\nНапиши мне промпт"
-      " на английском языке, и я зарегистрирую аккаунт через рабочий прокси и"
-      " сгенерирую видео!\n\nПример: `A futuristic cyberpunk city, neon"
-      " lights, 8k`",
-      parse_mode="Markdown",
+      "👋 Привет! Напиши мне промпт на английском языке, и я сгенерирую для тебя"
+      " видео через Pika.art!",
   )
 
 
@@ -298,7 +288,7 @@ async def send_welcome(message):
 async def process_prompt(message):
   prompt = message.text
   status_msg = await bot.reply_to(
-      message, "⏳ [1/4] Ищем рабочий прокси и создаем аккаунт..."
+      message, "⏳ [1/4] Регистрация временного аккаунта..."
   )
 
   async with aiohttp.ClientSession() as session:
@@ -307,7 +297,8 @@ async def process_prompt(message):
     )
     if not email:
       await bot.edit_message_text(
-          "❌ Все прокси заблокированы или недоступны. Попробуйте позже.",
+          "❌ Ошибка регистрации аккаунта (возможно, временная почта или API"
+          " недоступны). Попробуйте позже.",
           message.chat.id,
           status_msg.message_id,
       )
@@ -322,16 +313,14 @@ async def process_prompt(message):
     token = await engine.login(session, email, password, used_proxy)
     if not token:
       await bot.edit_message_text(
-          "❌ Ошибка входа в сгенерированный аккаунт.",
-          message.chat.id,
-          status_msg.message_id,
+          "❌ Ошибка входа в аккаунт.", message.chat.id, status_msg.message_id
       )
       return
 
     job_id = await engine.create_video(session, token, prompt, used_proxy)
     if not job_id:
       await bot.edit_message_text(
-          "❌ Не удалось отправить промпт на генерацию.",
+          "❌ Не удалось отправить промпт (ошибка подключения к API Pika).",
           message.chat.id,
           status_msg.message_id,
       )
@@ -360,10 +349,7 @@ async def process_prompt(message):
 
     try:
       await bot.send_video(
-          message.chat.id,
-          video_url,
-          caption=f"✨ **Промпт:** {prompt}",
-          parse_mode="Markdown",
+          message.chat.id, video_url, caption=f"✨ **Промпт:** {prompt}"
       )
       await bot.delete_message(message.chat.id, status_msg.message_id)
     except Exception:
@@ -375,12 +361,9 @@ async def process_prompt(message):
 
 
 if __name__ == "__main__":
-  # Запускаем веб-сервер Flask для Render
   web_thread = Thread(target=run_web)
   web_thread.daemon = True
   web_thread.start()
 
-  print("🤖 Бот с ротацией прокси запущен...")
-  # Используем стандартный polling с таймаутом, чтобы избегать ошибки 409 Conflict
+  print("🤖 Бот запущен...")
   asyncio.run(bot.infinity_polling(timeout=20))
-
