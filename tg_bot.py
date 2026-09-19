@@ -118,7 +118,6 @@ class TempMailAPI:
 class PikaEngine:
 
   def __init__(self):
-    # Начальные фолбэк-значения
     self.supabase_host = "xrcfahrzkjpblmrsaknx.supabase.co"
     self.api_key = "sb_publishable_HTxwdzVcJvk01MQMOCQCmg_KULx5ESC"
 
@@ -144,15 +143,12 @@ class PikaEngine:
           "https://create.pika.art", proxy=proxy, timeout=10
       ) as resp:
         if resp.status != 200:
-          print(
-              f"[Config Warning] Главная страница вернула статус {resp.status}"
-          )
           return
         html = await resp.text()
 
       js_links = re.findall(r'src="(/_next/static/[^"]+\.js)"', html)
       found_new = False
-      for link in js_links[:5]:  две первые ссылки
+      for link in js_links[:5]:
         try:
           async with session.get(
               f"https://create.pika.art{link}", proxy=proxy, timeout=10
@@ -183,7 +179,6 @@ class PikaEngine:
   ):
     for proxy in PROXY_LIST:
       try:
-        # Всегда проверяем и обновляем ключи перед регистрацией
         await self.update_config(session, proxy)
 
         mail_api = TempMailAPI(session, proxy=proxy)
