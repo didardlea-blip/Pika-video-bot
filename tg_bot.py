@@ -382,4 +382,5 @@ if __name__ == "__main__":
 
   print("🤖 Бот с ротацией прокси запущен...")
   # Используем стандартный polling с таймаутом, чтобы избегать ошибки 409 Conflict
-  asyncio.run(bot.infinity_polling(timeout=20, long_polling_timeout=20))
+  asyncio.run(bot.infinity_polling(timeout=20))
+
