@@ -1,10 +1,11 @@
-FROM python:3.10-slim
+FROM mcr.microsoft.com/playwright:v1.49.0-jammy
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN playwright install chromium
 
 COPY . .
 
-CMD ["python", "tg_bot.py"]
+CMD ["python", "bot.py"]
